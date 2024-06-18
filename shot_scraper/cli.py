@@ -1266,7 +1266,7 @@ def take_shot(
         page.wait_for_function(wait_for)
 
     if clear_common_popups:
-        page_copy = copy.deepcopy(page)
+        page_copy = page
         try:
             click_consent_manager(page)
         except:
