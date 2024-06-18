@@ -1,3 +1,5 @@
+import copy
+
 import click
 from click_default_group import DefaultGroup
 import json
@@ -1264,7 +1266,7 @@ def take_shot(
         page.wait_for_function(wait_for)
 
     if clear_common_popups:
-        page_copy = page.copy()
+        page_copy = copy.deepcopy(page)
         try:
             click_consent_manager(page)
         except:
