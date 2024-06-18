@@ -7,7 +7,6 @@ from playwright.sync_api import sync_playwright, Error, TimeoutError
 from runpy import run_module
 import secrets
 import sys
-import asyncio
 import textwrap
 import time
 import logging
@@ -1265,8 +1264,11 @@ def take_shot(
         page.wait_for_function(wait_for)
 
     if clear_common_popups:
-        click_consent_manager(page)
-
+        page_copy = page.copy()
+        try:
+            click_consent_manager(page)
+        except:
+            page = page_copy
     screenshot_args = {}
     if quality:
         screenshot_args.update({"quality": quality, "type": "jpeg"})
