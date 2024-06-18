@@ -7,8 +7,11 @@ from playwright.sync_api import sync_playwright, Error, TimeoutError
 from runpy import run_module
 import secrets
 import sys
+import asyncio
 import textwrap
 import time
+import logging
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 import yaml
 
 from shot_scraper.utils import filename_for_url, url_or_file_path
@@ -236,6 +239,11 @@ def cli():
     type=click.File("w"),
     help="Log details of all requests to this file",
 )
+@click.option(
+    "--clear-common-popups",
+    is_flag=True,
+    help="Identifies and clears common popups, such as cookies notifications",
+)
 @log_console_option
 @browser_option
 @browser_args_option
@@ -268,6 +276,7 @@ def shot(
     devtools,
     log_requests,
     log_console,
+    clear_common_popups,
     browser,
     browser_args,
     user_agent,
@@ -367,6 +376,7 @@ def shot(
                     log_requests=log_requests,
                     log_console=log_console,
                     silent=silent,
+                    clear_common_popups=clear_common_popups,
                 )
                 sys.stdout.buffer.write(shot)
             else:
@@ -380,6 +390,7 @@ def shot(
                     skip=skip,
                     fail=fail,
                     silent=silent,
+                    clear_common_popups=clear_common_popups,
                 )
         except TimeoutError as e:
             raise click.ClickException(str(e))
@@ -1062,6 +1073,91 @@ def _get_viewport(width, height):
     else:
         return {}
 
+MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONSENT_MANAGERS_FILE = f"{MODULE_DIR}/assets/consent_managers.yml"
+def get_extract_schema():
+    return {
+        "id": "STRING",
+        "url": "STRING",
+        "domain_name": "STRING",
+        "extraction_datetime": "STRING",
+        "cookies_all": "STRING",
+        "cookies_no_consent": "STRING",
+        "third_party_domains_all": "STRING",
+        "third_party_domains_no_consent": "STRING",
+        "tracking_domains_all": "STRING",
+        "tracking_domains_no_consent": "STRING",
+        "consent_manager": "STRING",
+        "screenshot_files": "STRING",
+        "meta_tags": "STRING",
+        "json_ld": "STRING",
+        "status": "STRING",
+        "status_msg": "STRING",
+    }
+
+def get_consent_managers():
+    with open(CONSENT_MANAGERS_FILE, "r") as f:
+        data = yaml.safe_load(f)
+        return data
+
+def click_consent_manager(page):
+    """Retrieve list of potential consent managers and required actions to accept. Then click and return the consent manager."""
+    consent_managers = get_consent_managers()
+
+    for cmp in consent_managers:
+        parent_locator = page
+        locator = None
+
+        for action in cmp["actions"]:
+            if action["type"] == "iframe":
+                if parent_locator.locator(action["value"]).count() > 0:
+                    parent_locator = parent_locator.frame_locator(action["value"]).first
+                else:
+                    continue
+
+            elif action["type"] == "css-selector":
+                if parent_locator.locator(action["value"]).first.is_visible():
+                    locator = parent_locator.locator(action["value"])
+                    break
+
+            elif action["type"] == "css-selector-list":
+                for selector in action["value"]:
+                    if parent_locator.locator(selector).first.is_visible():
+                        locator = parent_locator.locator(selector)
+                        cmp["selector-list-item"] = selector
+                        break
+
+            elif action["type"] == "xpath":
+                logging.info("XPath not implemented yet.")
+
+        if locator is not None:
+            logging.debug(
+                f"Found {locator.count()} elements for consent manager '{cmp['id']}'"
+            )
+
+            try:
+                # explicit wait for navigation as some pages will reload after accepting cookies
+                with page.expect_navigation(
+                    wait_until="networkidle", timeout=15000
+                ):
+                    locator.first.click(delay=10)
+                    logging.debug(f"Clicked consent manager '{cmp['id']}'")
+
+                    return cmp
+            except PlaywrightTimeoutError:
+                logging.debug("Timeout, no navigation")
+                cmp["status"] = "timeout"
+                return cmp
+
+            except Exception as e:
+                error_msg = f"Error clicking consent manager '{cmp['id']}': {e}"
+                logging.debug(error_msg)
+                cmp["status"] = "error"
+                cmp["error"] = error_msg
+                return cmp
+
+    logging.debug(f"Unable to accept cookies on: {page.url}")
+    return {}
 def take_shot(
     context_or_page,
     shot,
@@ -1072,7 +1168,9 @@ def take_shot(
     skip=False,
     fail=False,
     silent=False,
+    clear_common_popups=False,
 ):
+
     url = shot.get("url") or ""
     if not url:
         raise click.ClickException("url is required")
@@ -1165,6 +1263,9 @@ def take_shot(
 
     if wait_for:
         page.wait_for_function(wait_for)
+
+    if clear_common_popups:
+        click_consent_manager(page)
 
     screenshot_args = {}
     if quality:
