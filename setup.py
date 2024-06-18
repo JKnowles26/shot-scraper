@@ -24,6 +24,9 @@ setup(
         "CI": "https://github.com/simonw/shot-scraper/actions",
         "Changelog": "https://github.com/simonw/shot-scraper/releases",
     },
+    package_data={
+        '': ['assets/*'],  # Include all files under 'assets' folder
+    },
     license="Apache License, Version 2.0",
     version=VERSION,
     packages=["shot_scraper"],
